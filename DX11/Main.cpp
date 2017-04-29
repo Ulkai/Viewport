@@ -126,7 +126,8 @@ void InitD3D11(HWND Window)
 	}
 
 	{ // Texture
-		const UINT TEX_SIZE = 256;
+		const UINT TEX_SIZE = 1024;
+		const UINT TEX_MIPS = 11;
 		D3D11_TEXTURE2D_DESC TexDesc = { 0 };
 		TexDesc.ArraySize = 1;
 		TexDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -134,22 +135,25 @@ void InitD3D11(HWND Window)
 		TexDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		TexDesc.Width = TEX_SIZE;
 		TexDesc.Height = TEX_SIZE;
-		TexDesc.MipLevels = 1;
+		TexDesc.MipLevels = TEX_MIPS;
 		TexDesc.SampleDesc.Count = 1;
-		TexDesc.Usage = D3D11_USAGE_DYNAMIC;
+		TexDesc.Usage = D3D11_USAGE_DEFAULT;
 		Device->CreateTexture2D(&TexDesc, NULL, &Texture);
-		D3D11_MAPPED_SUBRESOURCE Mapped;
-		Context->Map(Texture, 0, D3D11_MAP_WRITE_DISCARD, NULL, &Mapped);
-		for (UINT32 Row = 0; Row < TEX_SIZE; Row++)
+		UINT32 *TexData = (UINT32*)malloc(sizeof(UINT32) * TEX_SIZE * TEX_SIZE);
+		for (UINT32 Mip = 0; Mip < TEX_MIPS; Mip++)
 		{
-			UINT32 *Data = (UINT32*)(((UINT8*)Mapped.pData) + Mapped.RowPitch*Row);
-			for (UINT32 Col = 0; Col < TEX_SIZE; Col++)
+			UINT32 MipSize = TEX_SIZE >> Mip;
+			for (UINT32 Row = 0; Row < MipSize; Row++)
 			{
-				UINT32 Color = (!(Col & 15) || !(Row & 15)) ? 255 : 127;
-				Data[Col] = Color << 24 | Color << 16 | Color << 8 | Color;
+				for (UINT32 Col = 0; Col < MipSize; Col++)
+				{
+					UINT32 Color = ((Col>>(5-Mip)) + (Row>>(5-Mip)))&1 ? 255 : 127;
+					TexData[Row*TEX_SIZE + Col] = Color << 24 | Color << 16 | Color << 8 | Color;
+				}
 			}
+			Context->UpdateSubresource(Texture, Mip, nullptr, TexData, sizeof(UINT32)*TEX_SIZE, 0);
 		}
-		Context->Unmap(Texture, 0);
+		free(TexData);
 		D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc;
 		SRVDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
@@ -158,7 +162,7 @@ void InitD3D11(HWND Window)
 		Device->CreateShaderResourceView(Texture, &SRVDesc, &TextureSRV);
 		Context->PSSetShaderResources(0, 1, &TextureSRV);
 		D3D11_SAMPLER_DESC SamplerDesc;
-		SamplerDesc.Filter = D3D11_FILTER_MAXIMUM_MIN_MAG_MIP_LINEAR;
+		SamplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
 		SamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
 		SamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
 		SamplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
