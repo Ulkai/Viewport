@@ -3,6 +3,7 @@
 #include <wtypes.h>   
 #include <D3D11.h>
 #include <D3Dcompiler.h>
+#include <DDSTextureLoader.h>
 #pragma comment(lib, "D3D11.lib")
 #pragma comment(lib, "D3dcompiler.lib")
 
