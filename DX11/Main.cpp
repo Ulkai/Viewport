@@ -3,7 +3,6 @@
 #include <wtypes.h>   
 #include <D3D11.h>
 #include <D3Dcompiler.h>
-#include <DDSTextureLoader.h>
 #pragma comment(lib, "D3D11.lib")
 #pragma comment(lib, "D3dcompiler.lib")
 
@@ -15,9 +14,12 @@ ID3D11VertexShader *VS;
 ID3D11PixelShader *PS;
 ID3D11InputLayout *Input;
 ID3D11Buffer *VB;
+ID3D11Texture2D *Texture;
+ID3D11ShaderResourceView *TextureSRV;
+ID3D11SamplerState *SamplerState;
 
-int WindowWidth = 640;
-int WindowHeight = 480;
+int WindowWidth = 1024;
+int WindowHeight = 1024;
 
 void Log(wchar_t* Format, ...)
 {
@@ -33,6 +35,7 @@ struct Vertex
 {
 	float Position[3];
 	float Color[4];
+	float UV[2];
 };
 
 void InitD3D11(HWND Window)
@@ -51,11 +54,21 @@ void InitD3D11(HWND Window)
 	SwapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 	SwapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
-	hr = D3D11CreateDeviceAndSwapChain(NULL
+	UINT CreationFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT
+#if defined(_DEBUG)
+		| D3D11_CREATE_DEVICE_DEBUG
+#endif
+		;
+
+	hr = D3D11CreateDeviceAndSwapChain
+		( nullptr
 		, D3D_DRIVER_TYPE_HARDWARE
-		, NULL, NULL, NULL, NULL
+		, nullptr
+		, CreationFlags
+		, nullptr
+		, 0
 		, D3D11_SDK_VERSION
-		, &SwapChainDesc, &SwapChain, &Device, NULL, &Context);
+		, &SwapChainDesc, &SwapChain, &Device, nullptr, &Context);
 
 	// Output Merger
 	ID3D11Texture2D *BackBuffer;
@@ -68,8 +81,8 @@ void InitD3D11(HWND Window)
 	D3D11_VIEWPORT Viewport = { 0 };
 	Viewport.TopLeftX = 0;
 	Viewport.TopLeftY = 0;
-	Viewport.Width = 640;
-	Viewport.Height = 480;
+	Viewport.Width = (float)WindowWidth;
+	Viewport.Height = (float)WindowHeight;
 	Context->RSSetViewports(1, &Viewport);
 
 	// Vertex Shader
@@ -78,44 +91,92 @@ void InitD3D11(HWND Window)
 	Device->CreateVertexShader(VSBlob->GetBufferPointer(), VSBlob->GetBufferSize(), NULL, &VS);
 	Context->VSSetShader(VS, NULL, 0);
 
+		
+	{// Input Assembly
+		D3D11_INPUT_ELEMENT_DESC InputDesc[] =
+		{
+			{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 28, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		};
+		Device->CreateInputLayout(InputDesc, 3, VSBlob->GetBufferPointer(), VSBlob->GetBufferSize(), &Input);
+		Context->IASetInputLayout(Input);
+		Vertex Mesh[] =
+		{
+			{ 0.00f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.5f, 0.0f },
+			{ 0.45f, -0.5f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.1f, 1.0f },
+			{-0.45f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.9f, 1.0f },
+		};
+		D3D11_BUFFER_DESC VBDesc = { 0 };
+		VBDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+		VBDesc.ByteWidth = sizeof(Mesh);
+		VBDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		VBDesc.MiscFlags = 0;
+		VBDesc.StructureByteStride = 0;
+		VBDesc.Usage = D3D11_USAGE_DYNAMIC;
+		Device->CreateBuffer(&VBDesc, NULL, &VB);
+		D3D11_MAPPED_SUBRESOURCE Mapped;
+		Context->Map(VB, 0, D3D11_MAP_WRITE_DISCARD, NULL, &Mapped);
+		memcpy(Mapped.pData, Mesh, sizeof(Mesh));
+		Context->Unmap(VB, 0);
+		UINT Stride = sizeof(Vertex);
+		UINT Offset = 0;
+		Context->IASetVertexBuffers(0, 1, &VB, &Stride, &Offset);
+		Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	}
+
+	{ // Texture
+		const UINT TEX_SIZE = 256;
+		D3D11_TEXTURE2D_DESC TexDesc = { 0 };
+		TexDesc.ArraySize = 1;
+		TexDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		TexDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		TexDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		TexDesc.Width = TEX_SIZE;
+		TexDesc.Height = TEX_SIZE;
+		TexDesc.MipLevels = 1;
+		TexDesc.SampleDesc.Count = 1;
+		TexDesc.Usage = D3D11_USAGE_DYNAMIC;
+		Device->CreateTexture2D(&TexDesc, NULL, &Texture);
+		D3D11_MAPPED_SUBRESOURCE Mapped;
+		Context->Map(Texture, 0, D3D11_MAP_WRITE_DISCARD, NULL, &Mapped);
+		for (UINT32 Row = 0; Row < TEX_SIZE; Row++)
+		{
+			UINT32 *Data = (UINT32*)(((UINT8*)Mapped.pData) + Mapped.RowPitch*Row);
+			for (UINT32 Col = 0; Col < TEX_SIZE; Col++)
+			{
+				UINT32 Color = (!(Col & 15) || !(Row & 15)) ? 255 : 127;
+				Data[Col] = Color << 24 | Color << 16 | Color << 8 | Color;
+			}
+		}
+		Context->Unmap(Texture, 0);
+		D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc;
+		SRVDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		SRVDesc.Texture2D.MipLevels = -1;
+		SRVDesc.Texture2D.MostDetailedMip = 0;
+		Device->CreateShaderResourceView(Texture, &SRVDesc, &TextureSRV);
+		Context->PSSetShaderResources(0, 1, &TextureSRV);
+		D3D11_SAMPLER_DESC SamplerDesc;
+		SamplerDesc.Filter = D3D11_FILTER_MAXIMUM_MIN_MAG_MIP_LINEAR;
+		SamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+		SamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+		SamplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+		SamplerDesc.MipLODBias = 0.0f;
+		SamplerDesc.MaxAnisotropy = 1;
+		SamplerDesc.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
+		SamplerDesc.BorderColor[4] = { 0 };
+		SamplerDesc.MinLOD = 0;
+		SamplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+		Device->CreateSamplerState(&SamplerDesc, &SamplerState);
+	}
+
 	// Pixel Shader
 	ID3DBlob *PSBlob;
 	D3DReadFileToBlob(L"PixelShader.cso", &PSBlob);
 	Device->CreatePixelShader(PSBlob->GetBufferPointer(), PSBlob->GetBufferSize(), NULL, &PS);
 	Context->PSSetShader(PS, NULL, 0);
-
-	// Input Assembly
-	D3D11_INPUT_ELEMENT_DESC InputDesc[] =
-	{
-		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-		{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-	};
-	Device->CreateInputLayout(InputDesc, 2, VSBlob->GetBufferPointer(), VSBlob->GetBufferSize(), &Input);
-	Context->IASetInputLayout(Input);
-	Vertex Mesh[] =
-	{
-		{ 0.0f, 0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f },
-		{ 0.45f, -0.5, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f },
-		{ -0.45f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f },
-	};
-	D3D11_BUFFER_DESC VBDesc = { 0 };
-	VBDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-	VBDesc.ByteWidth = sizeof(Mesh);
-	VBDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-	VBDesc.MiscFlags = 0;
-	VBDesc.StructureByteStride = 0;
-	VBDesc.Usage = D3D11_USAGE_DYNAMIC;
-	Device->CreateBuffer(&VBDesc, NULL, &VB);
-	D3D11_MAPPED_SUBRESOURCE Mapped;
-	Context->Map(VB, 0, D3D11_MAP_WRITE_DISCARD, NULL, &Mapped);
-	memcpy(Mapped.pData, Mesh, sizeof(Mesh));
-	Context->Unmap(VB, 0);
-	UINT Stride = sizeof(Vertex);
-	UINT Offset = 0;
-	Context->IASetVertexBuffers(0, 1, &VB, &Stride, &Offset);
-	Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-	// Texture
+	Context->PSSetSamplers(0, 1, &SamplerState);
 }
 
 void ShutdownD3D11()
@@ -130,6 +191,9 @@ void ShutdownD3D11()
 	PS->Release();
 	Input->Release();
 	VB->Release();
+	Texture->Release();
+	TextureSRV->Release();
+	SamplerState->Release();
 }
 
 void RenderFrame()
@@ -139,7 +203,6 @@ void RenderFrame()
 	Context->Draw(3, 0);
 	SwapChain->Present(0, 0);
 }
-
 
 LRESULT CALLBACK WindowProc(HWND Window, UINT Msg, WPARAM wParam, LPARAM lParam)
 {
