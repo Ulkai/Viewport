@@ -6,17 +6,17 @@
 #pragma comment(lib, "D3D11.lib")
 #pragma comment(lib, "D3dcompiler.lib")
 
-IDXGISwapChain *SwapChain;
-ID3D11Device *Device;
-ID3D11DeviceContext *Context;
-ID3D11RenderTargetView *RenderTargetView;
-ID3D11VertexShader *VS;
-ID3D11PixelShader *PS;
-ID3D11InputLayout *Input;
-ID3D11Buffer *VB;
-ID3D11Texture2D *Texture;
-ID3D11ShaderResourceView *TextureSRV;
-ID3D11SamplerState *SamplerState;
+IDXGISwapChain *SwapChain = nullptr;
+ID3D11Device *Device = nullptr;
+ID3D11DeviceContext *Context = nullptr;
+ID3D11RenderTargetView *RenderTargetView = nullptr;
+ID3D11VertexShader *VS = nullptr;
+ID3D11PixelShader *PS = nullptr;
+ID3D11InputLayout *Input = nullptr;
+ID3D11Buffer *VB = nullptr;
+ID3D11Texture2D *Texture = nullptr;
+ID3D11ShaderResourceView *TextureSRV = nullptr;
+ID3D11SamplerState *SamplerState = nullptr;
 
 int WindowWidth = 1024;
 int WindowHeight = 1024;
@@ -90,35 +90,30 @@ void InitD3D11(HWND Window)
 	D3DReadFileToBlob(L"VertexShader.cso", &VSBlob);
 	Device->CreateVertexShader(VSBlob->GetBufferPointer(), VSBlob->GetBufferSize(), NULL, &VS);
 	Context->VSSetShader(VS, NULL, 0);
-
 		
 	{// Input Assembly
 		D3D11_INPUT_ELEMENT_DESC InputDesc[] =
 		{
 			{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-			{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-			{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 28, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		};
-		Device->CreateInputLayout(InputDesc, 3, VSBlob->GetBufferPointer(), VSBlob->GetBufferSize(), &Input);
+		Device->CreateInputLayout(InputDesc, ARRAYSIZE(InputDesc), VSBlob->GetBufferPointer(), VSBlob->GetBufferSize(), &Input);
 		Context->IASetInputLayout(Input);
 		Vertex Mesh[] =
 		{
-			{ 0.00f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.5f, 0.0f },
-			{ 0.45f, -0.5f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.1f, 1.0f },
-			{-0.45f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.9f, 1.0f },
+			{ 0.00f,  0.5f, 0.0f, 0.5f, 0.0f },
+			{ 0.45f, -0.5f, 0.0f, 0.1f, 1.0f },
+			{-0.45f, -0.5f, 0.0f, 0.9f, 1.0f },
 		};
 		D3D11_BUFFER_DESC VBDesc = { 0 };
 		VBDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 		VBDesc.ByteWidth = sizeof(Mesh);
-		VBDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		VBDesc.CPUAccessFlags = 0;
 		VBDesc.MiscFlags = 0;
 		VBDesc.StructureByteStride = 0;
-		VBDesc.Usage = D3D11_USAGE_DYNAMIC;
+		VBDesc.Usage = D3D11_USAGE_DEFAULT;
 		Device->CreateBuffer(&VBDesc, NULL, &VB);
-		D3D11_MAPPED_SUBRESOURCE Mapped;
-		Context->Map(VB, 0, D3D11_MAP_WRITE_DISCARD, NULL, &Mapped);
-		memcpy(Mapped.pData, Mesh, sizeof(Mesh));
-		Context->Unmap(VB, 0);
+		Context->UpdateSubresource(VB, 0, nullptr, Mesh, 0, 0);
 		UINT Stride = sizeof(Vertex);
 		UINT Offset = 0;
 		Context->IASetVertexBuffers(0, 1, &VB, &Stride, &Offset);
@@ -147,8 +142,12 @@ void InitD3D11(HWND Window)
 			{
 				for (UINT32 Col = 0; Col < MipSize; Col++)
 				{
-					UINT32 Color = ((Col>>(5-Mip)) + (Row>>(5-Mip)))&1 ? 255 : 127;
-					TexData[Row*TEX_SIZE + Col] = Color << 24 | Color << 16 | Color << 8 | Color;
+					UINT32 Color = ((Col>>(6-Mip)) + (Row>>(6-Mip)))&1 ? 255 : 127;
+					TexData[Row*TEX_SIZE + Col] 
+						= 0xFF000000
+						| 256 * Row / MipSize << 16 
+						| 256 * Col / MipSize << 8
+						| Color;
 				}
 			}
 			Context->UpdateSubresource(Texture, Mip, nullptr, TexData, sizeof(UINT32)*TEX_SIZE, 0);
@@ -161,18 +160,6 @@ void InitD3D11(HWND Window)
 		SRVDesc.Texture2D.MostDetailedMip = 0;
 		Device->CreateShaderResourceView(Texture, &SRVDesc, &TextureSRV);
 		Context->PSSetShaderResources(0, 1, &TextureSRV);
-		D3D11_SAMPLER_DESC SamplerDesc;
-		SamplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
-		SamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-		SamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-		SamplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-		SamplerDesc.MipLODBias = 0.0f;
-		SamplerDesc.MaxAnisotropy = 1;
-		SamplerDesc.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
-		SamplerDesc.BorderColor[4] = { 0 };
-		SamplerDesc.MinLOD = 0;
-		SamplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-		Device->CreateSamplerState(&SamplerDesc, &SamplerState);
 	}
 
 	// Pixel Shader
@@ -180,6 +167,18 @@ void InitD3D11(HWND Window)
 	D3DReadFileToBlob(L"PixelShader.cso", &PSBlob);
 	Device->CreatePixelShader(PSBlob->GetBufferPointer(), PSBlob->GetBufferSize(), NULL, &PS);
 	Context->PSSetShader(PS, NULL, 0);
+	D3D11_SAMPLER_DESC SamplerDesc;
+	SamplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+	SamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+	SamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+	SamplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+	SamplerDesc.MipLODBias = 0.0f;
+	SamplerDesc.MaxAnisotropy = 1;
+	SamplerDesc.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
+	SamplerDesc.BorderColor[4] = { 0 };
+	SamplerDesc.MinLOD = 0;
+	SamplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+	Device->CreateSamplerState(&SamplerDesc, &SamplerState);
 	Context->PSSetSamplers(0, 1, &SamplerState);
 }
 
@@ -215,6 +214,46 @@ LRESULT CALLBACK WindowProc(HWND Window, UINT Msg, WPARAM wParam, LPARAM lParam)
 		case WM_DESTROY:
 			::PostQuitMessage(0);
 			return 0;
+
+		case WM_SIZE:
+			if (SwapChain)
+			{
+				Context->OMSetRenderTargets(0, 0, 0);
+
+				// Release all outstanding references to the swap chain's buffers.
+				RenderTargetView->Release();
+
+				HRESULT hr;
+				// Preserve the existing buffer count and format.
+				// Automatically choose the width and height to match the client rect for HWNDs.
+				hr = SwapChain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+
+				// Perform error handling here!
+
+				// Get buffer and create a render-target-view.
+				ID3D11Texture2D* pBuffer;
+				hr = SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D),
+					(void**)&pBuffer);
+				// Perform error handling here!
+
+				hr = Device->CreateRenderTargetView(pBuffer, NULL,
+					&RenderTargetView);
+				// Perform error handling here!
+				pBuffer->Release();
+
+				Context->OMSetRenderTargets(1, &RenderTargetView, NULL);
+
+				// Set up the viewport.
+				D3D11_VIEWPORT vp;
+				vp.Width = LOWORD(lParam);
+				vp.Height = HIWORD(lParam);
+				vp.MinDepth = 0.0f;
+				vp.MaxDepth = 1.0f;
+				vp.TopLeftX = 0;
+				vp.TopLeftY = 0;
+				Context->RSSetViewports(1, &vp);
+			}
+			break;
 	}
 	return ::DefWindowProc(Window, Msg, wParam, lParam);
 }
@@ -234,11 +273,18 @@ int CALLBACK WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, 
 	int ScreenHeight = ::GetSystemMetrics(SM_CYSCREEN);
 
 	ATOM Atom = ::RegisterClassEx(&WndClass);
-	HWND Window = ::CreateWindowEx(NULL, ClassName, WindowName, 0
+	HWND Window = ::CreateWindowEx( NULL
+		, ClassName
+		, WindowName
+		, WS_OVERLAPPEDWINDOW
 		, (ScreenWidth - WindowWidth) / 2
 		, (ScreenHeight - WindowHeight) / 2
-		, WindowWidth, WindowHeight
-		, NULL, NULL, Instance, NULL);
+		, WindowWidth
+		, WindowHeight
+		, NULL
+		, NULL
+		, Instance
+		, NULL);
 
 	::ShowWindow(Window, CmdShow);
 
